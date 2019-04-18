@@ -70,7 +70,9 @@ class Time_LSTM:
         self.h_prev, self.c_prev = None
         self.stateful = stateful
 
-    def forward(self, xs, h_prev, c_prev ):
+
+
+    def forward(self, xs ):
 
         weight_hs, weight_xs, bs = self.params
 
@@ -79,8 +81,11 @@ class Time_LSTM:
 
         self.layers=[]
 
-        if self.stateful == False :
+        if self.stateful == False  or self.h_prev == None:
+            self.h_prev = np.zeros((N,H))
 
+        if self.stateful == False or self.c_prev ==None :
+            self.c_prev = np.zeros((N,H))
 
         for i in range(T):
             layer = LSTM(self.params)
