@@ -6,6 +6,8 @@ def sigmoid(x):
     return result
 
 
+
+
 class LSTM:
     def __init__(self, weight_x, weight_h, b):
 
@@ -132,9 +134,9 @@ class Embeding:
         self.index= None                        # 索引
 
     def forward(self, index):
-        if index >= self.weight.shape[0]:
-            print(" index > row count")
-            return None
+        # if index >= self.weight.shape[0]:
+        #     print(" index > row count")
+        #     return None
         self.index = index
         return self.weight[index]
 
@@ -147,9 +149,17 @@ class TimeEmbedding:
     def __init__(self, weight):
         self.weight=weight
         self.grads=np.zeros_like(self.weight)
-
+        self.model = Embeding(self.weight, self.grads)
 
     def forward(self, xs):
+        N, T = xs.shape
+        D = self.weight.shape[1]
+
+        xsData = np.empty((N,T,D), dtype='f')
+
+        for i in range(T):
+            self.model.forward(xs)
+
         return None
 
     def backward(self, dout):
