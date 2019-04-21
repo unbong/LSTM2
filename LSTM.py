@@ -355,13 +355,15 @@ class SGD:
 
 class train:
     def __init__(self, batch_sise=20, time_size=5, VOCAB_SIZE=1000, WORDVEC_SIZE=50, HIDDED_SIZE=50,
-                 learning_r=0.01):
+                 learning_r=0.01, max_eporch=100):
         self.batch_size = batch_sise
         self.time_size = time_size
         self.vocab_size = VOCAB_SIZE
         self.wordvec_size = WORDVEC_SIZE
         self.hidden_size = HIDDED_SIZE
         self.learning_r = learning_r
+        self.max_eporch = max_eporch
+        self.
 
     def read_data(self, path):
         corpus, word_to_id, id_to_word = ptb.load_data('train')
@@ -381,8 +383,8 @@ class train:
         return self.xs.size / self.time_size
 
     def get_batch_count(self):
-        batch_count = self.xs.size / self.batch_size
-        if (self.xs.size % self.batch_size) != 0:
+        batch_count = self.xs.size / self.batch_size * self.time_size
+        if (self.xs.size % self.batch_size * self.time_size) != 0:
             batch_count += 1
 
         return batch_count
@@ -392,10 +394,13 @@ class train:
         batch_xs = np.zeros_like(self.time_size, self.batch_size)
         batch_ts = np.zeros_like(self.time_size, self.batch_size)
         step_size = self.get_step_sise()
-        data_size = self.xs.cou
+        data_size = self.xs.size
 
         for i in range(self.batch_size):
             for t in range(self.time_size):
-                batch_xs[t][i] = self.xs[ (i +  step_size + t) %  ]
+                batch_xs[t][i] = self.xs[(i + step_size * t + index * self.batch_size) % data_size]
+                batch_ts[t][i] = self.ts[(i + step_size * t + index * self.batch_size) % data_size]
 
-    def get_batch_ts(self, index):
+        return batch_xs, batch_ts
+
+    def trian(self):
