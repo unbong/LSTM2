@@ -1,10 +1,21 @@
 import numpy as np
-
+from dataset import ptb
 
 def sigmoid(x):
     result = 1 / (1+ np.exp(-x))
     return result
 
+
+def softmax(x):
+    if x.ndim == 2:
+        x = x - x.max(axis=1, keepdims=True)
+        x = np.exp(x)
+        x /= x.sum(axis=1, keepdims=True)
+    elif x.ndim == 1:
+        x = x - np.max(x)
+        x = np.exp(x) / np.sum(np.exp(x))
+
+    return x
 
 
 
@@ -39,6 +50,8 @@ class LSTM:
         tanh_c_next = np.tanh(c_next)
         d_c_next_calc_by_hidden = d_c_next + (d_h_next * output_mat) * (1 - tanh_c_next**2)
 
+        # TODO: d_c_prev は dct * forget かな？
+        d_c_prev = d_c_next_calc_by_hidden * forget_mat
         d_g_mat = d_c_next_calc_by_hidden * input_mat
         d_input_mat = d_c_next_calc_by_hidden * g_mat
         d_forget_mat = d_c_next_calc_by_hidden * c_prev
@@ -83,6 +96,7 @@ class Time_LSTM:
 
         self.layers=[]
 
+
         if self.stateful == False or self.h_prev == None:
             self.h_prev = np.zeros((N,H))
 
@@ -91,7 +105,7 @@ class Time_LSTM:
 
         for i in range(T):
             layer = LSTM(self.params)
-            self.h_prev , self.c_prev = layer.forward(xs[:, i, :], h_prev, c_prev )
+            self.h_prev, self.c_prev = layer.forward(xs[:, i, :], self.h_prev, self.c_prev)
             self.layers.append(layer)
             hs[:, i, :] = self.h_prev
         return hs
@@ -128,9 +142,8 @@ class Time_LSTM:
         self.c_prev = cell
 
 class Embeding:
-    def __init__(self, weight, grads):
+    def __init__(self, weight):
         self.weight = weight                    #
-        self.grads = grads   # 导数
         self.index= None                        # 索引
 
     def forward(self, index):
@@ -141,7 +154,10 @@ class Embeding:
         return self.weight[index]
 
     def backward(self, ds):
-        np.add.at(self.grads, self.index, ds)
+        dout = np.zeros_like(self.weight)
+        dout[...] = 0
+        np.add.at(dout, self.index, ds)
+        self.grads = dout
         return None
 
 
@@ -149,21 +165,231 @@ class TimeEmbedding:
     def __init__(self, weight):
         self.weight=weight
         self.grads=np.zeros_like(self.weight)
-        self.model = Embeding(self.weight, self.grads)
+        self.layers = None
+
 
     def forward(self, xs):
         N, T = xs.shape
         D = self.weight.shape[1]
-
+        self.layers = []
         xsData = np.empty((N,T,D), dtype='f')
 
         for i in range(T):
-            self.model.forward(xs)
-
-        return None
+            model = Embeding(self.weight)
+            xsData[:, i, :] = model.forward(xs[:, i])
+            self.layers.append(model)
+        return xsData
 
     def backward(self, dout):
-        return None
+
+        N, T, D = dout.shape
+        grad = 0
+        for i in reversed(range(T)):
+            layer = self.layers[i]
+            layer.backward(dout[:, i, :])
+            grad += layer.grads
+
+        self.grads[...] = grad
+
+        return self.grads
 
 
+class Affine:
 
+    def __init__(self, weight, b):
+        self.params = [weight, b]
+        self.grads = [np.zeros_like(weight), np.zeros_like(b)]
+        self.cache = None
+
+    def forwad(self, x):
+        weight, b = self.params
+        out = np.dot(x, weight) + b
+        self.x = x
+        return out
+
+    def backward(self, ds):
+        weight, b = self.params
+
+        dx = np.dot(ds, weight.T)
+        dweight = np.dot(self.x.T, ds)
+
+        db = np.sum(ds, axis=0)
+
+        self.grads[0][...] = dweight
+        self.grads[1][...] = dx
+
+        return dx
+
+
+class TimeAffine:
+
+    def __init__(self, weights, bs):
+        self.params = [weights, bs]
+        self.grads = [np.zeros_like(weights), np.zeros_like(bs)]
+        self.cache = None
+        self.layers = None
+
+    def forward(self, xs):
+        weights, bs = self.params
+        N, T, D = xs.shape
+
+        rxs = xs.reshape(N * T, -1)
+        self.xs = xs
+        out = np.dot(rxs, weights) + bs
+        return out.reshape(N, T, -1)
+
+    def backward(self, douts):
+        weights, bs = self.params
+
+        N, T, H = douts.shape
+
+        douts = douts.reshape(N * T, -1)
+        xs = self.xs
+        xs = xs.reshape(N * T, -1)
+        dweight = np.dot(xs.T, douts)
+        dx = np.dot(douts, weights.T)
+        db = np.sum(douts, axis=0)
+
+        self.grads[0][...] = dweight
+        self.grads[1][...] = db
+
+        return dx.reshape(*self.xs.shape)
+
+
+class TimeSoftmaxWithLoss:
+    def __init__(self):
+        self.params, self.grads = [], []
+        self.cache = None
+        self.ignore_label = -1
+
+    def forward(self, xs, ts):
+        N, T, V = xs.shape
+
+        if ts.ndim == 3:  # 教師ラベルがone-hotベクトルの場合
+            ts = ts.argmax(axis=2)
+
+        mask = (ts != self.ignore_label)
+
+        # バッチ分と時系列分をまとめる（reshape）
+        xs = xs.reshape(N * T, V)
+        ts = ts.reshape(N * T)
+        mask = mask.reshape(N * T)
+
+        ys = softmax(xs)
+        ls = np.log(ys[np.arange(N * T), ts])
+        ls *= mask  # ignore_labelに該当するデータは損失を0にする
+        loss = -np.sum(ls)
+        loss /= mask.sum()
+
+        self.cache = (ts, ys, mask, (N, T, V))
+        return loss
+
+    def backward(self, dout=1):
+        ts, ys, mask, (N, T, V) = self.cache
+
+        dx = ys
+        dx[np.arange(N * T), ts] -= 1
+        dx *= dout
+        dx /= mask.sum()
+        dx *= mask[:, np.newaxis]  # ignore_labelに該当するデータは勾配を0にする
+
+        dx = dx.reshape((N, T, V))
+
+        return dx
+
+
+class simpleLSTM:
+    def __init__(self, VOCAB_SIZE=1000, WORDVEC_SIZE=50, HIDDED_SIZE=50):
+        rn = np.random.randn
+        weight_embedding = (rn(VOCAB_SIZE, WORDVEC_SIZE) / 100).astype('f')
+        weight_affien = (rn(HIDDED_SIZE, HIDDED_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
+        weight_LSTM_x = (rn(WORDVEC_SIZE, 4 * HIDDED_SIZE) / np.sqrt(WORDVEC_SIZE)).astype('f')
+        weight_LSTM_hidden = (rn(HIDDED_SIZE, 4 * HIDDED_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
+        weight_LSTM_bias = (rn(HIDDED_SIZE, 4 * HIDDED_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
+
+        weight_bias = (rn(HIDDED_SIZE, HIDDED_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
+
+        self.layers = [TimeEmbedding(weight_embedding),
+                       Time_LSTM(weight_LSTM_x, weight_LSTM_hidden, weight_LSTM_bias, stateful=True),
+                       TimeAffine(weight_affien, weight_bias)]
+
+        # すべての重みと勾配をリストにまとめる
+        self.params, self.grads = [], []
+        for layer in self.layers:
+            self.params += layer.params
+            self.grads += layer.grads
+
+    def forward(self, xs, ts):
+
+        for layer in self.layers:
+            xs = layer.forward(xs)
+
+        softWithLoss = TimeSoftmaxWithLoss()
+        self.loselayer = softWithLoss
+        loss = softWithLoss.forward(xs, ts)
+        return loss
+
+    def backward(self, dout=1):
+        dout = self.loselayer.backward(dout)
+        for layer in reversed(self.layers):
+            dout = layer.backward(dout)
+
+        return dout
+
+    def reset_state(self):
+        self.layers[1].resetstate()
+
+
+class SGD:
+    '''
+    確率的勾配降下法（Stochastic Gradient Descent）
+    '''
+
+    def __init__(self, lr=0.01):
+        self.lr = lr
+
+    def update(self, params, grads):
+        for i in range(len(params)):
+            params[i] -= self.lr * grads[i]
+
+
+class train:
+    def __init__(self, batch_sise=20, time_size=5, VOCAB_SIZE=1000, WORDVEC_SIZE=50, HIDDED_SIZE=50,
+                 learning_r=0.01):
+        self.batch_size = batch_sise
+        self.time_size = time_size
+        self.vocab_size = VOCAB_SIZE
+        self.wordvec_size = WORDVEC_SIZE
+        self.hidden_size = HIDDED_SIZE
+        self.learning_r = learning_r
+
+    def read_data(self, path):
+        corpus, word_to_id, id_to_word = ptb.load_data('train')
+        corpus_test, _, _ = ptb.load_data('test')
+        self.vocab_size = len(word_to_id)
+        self.corpus = corpus
+        self.word_to_id = word_to_id
+        self.id_to_word = id_to_word
+
+    def get_xs(self):
+        return self.corpus[:-1]
+
+    def get_tx(self):
+        return self.corpus[1:]
+
+    def get_step_sise(self):
+        return self.xs.count() / self.time_size
+
+    def get_batch_count(self):
+        batch_count = self.xs.count() / self.batch_size
+        if (self.xs.count() % self.batch_size) != 0:
+            batch_count += 1
+
+        return batch_count
+
+    def get_batch_xs(self, index):
+
+        batch_xs = np.zeros_like(self.time_size, self.batch_size)
+        for i range(batch_size):
+
+    def get_batch_ts(self, index):
