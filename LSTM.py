@@ -378,11 +378,11 @@ class train:
         return self.corpus[1:]
 
     def get_step_sise(self):
-        return self.xs.count() / self.time_size
+        return self.xs.size / self.time_size
 
     def get_batch_count(self):
-        batch_count = self.xs.count() / self.batch_size
-        if (self.xs.count() % self.batch_size) != 0:
+        batch_count = self.xs.size / self.batch_size
+        if (self.xs.size % self.batch_size) != 0:
             batch_count += 1
 
         return batch_count
@@ -390,6 +390,12 @@ class train:
     def get_batch_xs(self, index):
 
         batch_xs = np.zeros_like(self.time_size, self.batch_size)
-        for i range(batch_size):
+        batch_ts = np.zeros_like(self.time_size, self.batch_size)
+        step_size = self.get_step_sise()
+        data_size = self.xs.cou
+
+        for i in range(self.batch_size):
+            for t in range(self.time_size):
+                batch_xs[t][i] = self.xs[ (i +  step_size + t) %  ]
 
     def get_batch_ts(self, index):
