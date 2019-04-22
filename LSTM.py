@@ -1,5 +1,7 @@
 import numpy as np
+
 from dataset import ptb
+
 
 def sigmoid(x):
     result = 1 / (1+ np.exp(-x))
@@ -34,8 +36,8 @@ class LSTM:
         # slice
         forget_mat= sigmoid(middle__mat[:,0:hiddel_layer_])
         input_mat = sigmoid(middle__mat[:, hiddel_layer_:2*hiddel_layer_])
-        g_mat = np.tanh(middle__mat[:, 2*hiddel_layer_, 3*hiddel_layer_])
-        output_mat = sigmoid(middle__mat[:, 3*hiddel_layer_, 4 * hiddel_layer_])
+        g_mat = np.tanh(middle__mat[:, 2*hiddel_layer_:3*hiddel_layer_])
+        output_mat = sigmoid(middle__mat[:, 3*hiddel_layer_: 4 * hiddel_layer_])
 
         c_next = ( c_prev * forget_mat ) + ( g_mat * input_mat )
         h_next = np.tanh( c_next  ) * output_mat
@@ -62,7 +64,7 @@ class LSTM:
         d_forget_mat = d_forget_mat * (1 - forget_mat) * forget_mat
         d_output_mat = d_output_mat * ( 1 - output_mat ) * output_mat
 
-        d_middle_mat = np.hstack(d_forget_mat, d_input_mat, d_g_mat, d_output_mat)
+        d_middle_mat = np.hstack((d_forget_mat, d_input_mat, d_g_mat, d_output_mat))
 
         d_weight_h = np.dot(h_prev.T, d_middle_mat)
         d_weight_x = np.dot(x.T, d_middle_mat)
@@ -80,7 +82,7 @@ class LSTM:
 
 class Time_LSTM:
     def __init__(self, weight_xs, weight_hs, bs, stateful = False):
-        self.params=[weight_hs, weight_xs, bs]
+        self.params=[weight_xs, weight_hs, bs]
         self.grads=[np.zeros_like(weight_hs), np.zeros_like(weight_xs), np.zeros_like(bs)]
         self.layers = None
         self.h_prev, self.c_prev = None, None
@@ -91,7 +93,7 @@ class Time_LSTM:
         weight_hs, weight_xs, bs = self.params
 
         N, T, D = xs.shape
-        H = weight_hs.shape[1]
+        H = weight_hs.shape[0]
         hs=np.empty((N, T, H), dtype='f')
 
         self.layers=[]
@@ -104,7 +106,7 @@ class Time_LSTM:
             self.c_prev = np.zeros((N,H))
 
         for i in range(T):
-            layer = LSTM(self.params)
+            layer = LSTM(weight_hs, weight_xs, bs)
             self.h_prev, self.c_prev = layer.forward(xs[:, i, :], self.h_prev, self.c_prev)
             self.layers.append(layer)
             hs[:, i, :] = self.h_prev
@@ -145,6 +147,8 @@ class Embeding:
     def __init__(self, weight):
         self.weight = weight                    #
         self.index= None                        # 索引
+        self.params = [weight]
+        self.grads = [np.zeros_like(weight)]
 
     def forward(self, index):
         # if index >= self.weight.shape[0]:
@@ -157,15 +161,16 @@ class Embeding:
         dout = np.zeros_like(self.weight)
         dout[...] = 0
         np.add.at(dout, self.index, ds)
-        self.grads = dout
+        self.grads[0] = dout
         return None
 
 
 class TimeEmbedding:
     def __init__(self, weight):
         self.weight=weight
-        self.grads=np.zeros_like(self.weight)
+        self.grads=[np.zeros_like(self.weight)]
         self.layers = None
+        self.params=[weight]
 
 
     def forward(self, xs):
@@ -187,9 +192,9 @@ class TimeEmbedding:
         for i in reversed(range(T)):
             layer = self.layers[i]
             layer.backward(dout[:, i, :])
-            grad += layer.grads
+            grad += layer.grads[0]
 
-        self.grads[...] = grad
+        self.grads[0][...] = grad
 
         return self.grads
 
@@ -302,19 +307,20 @@ class simpleLSTM:
     def __init__(self, VOCAB_SIZE=1000, WORDVEC_SIZE=50, HIDDED_SIZE=50):
         rn = np.random.randn
         weight_embedding = (rn(VOCAB_SIZE, WORDVEC_SIZE) / 100).astype('f')
-        weight_affien = (rn(HIDDED_SIZE, HIDDED_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
+        weight_affien = (rn(HIDDED_SIZE, VOCAB_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
         weight_LSTM_x = (rn(WORDVEC_SIZE, 4 * HIDDED_SIZE) / np.sqrt(WORDVEC_SIZE)).astype('f')
         weight_LSTM_hidden = (rn(HIDDED_SIZE, 4 * HIDDED_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
-        weight_LSTM_bias = (rn(HIDDED_SIZE, 4 * HIDDED_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
+        weight_LSTM_bias = (rn(4 * HIDDED_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
 
-        weight_bias = (rn(HIDDED_SIZE, HIDDED_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
+        weight_bias = (rn(VOCAB_SIZE) / np.sqrt(HIDDED_SIZE)).astype('f')
 
         self.layers = [TimeEmbedding(weight_embedding),
                        Time_LSTM(weight_LSTM_x, weight_LSTM_hidden, weight_LSTM_bias, stateful=True),
                        TimeAffine(weight_affien, weight_bias)]
 
         # すべての重みと勾配をリストにまとめる
-        self.params, self.grads = [], []
+        self.params = []
+        self.grads =  []
         for layer in self.layers:
             self.params += layer.params
             self.grads += layer.grads
@@ -353,7 +359,7 @@ class SGD:
             params[i] -= self.lr * grads[i]
 
 
-class train:
+class trainer:
     def __init__(self, batch_sise=20, time_size=5, VOCAB_SIZE=1000, WORDVEC_SIZE=50, HIDDED_SIZE=50,
                  learning_r=0.01, max_eporch=100):
         self.batch_size = batch_sise
@@ -363,7 +369,7 @@ class train:
         self.hidden_size = HIDDED_SIZE
         self.learning_r = learning_r
         self.max_eporch = max_eporch
-        self.
+        
 
     def read_data(self, path):
         corpus, word_to_id, id_to_word = ptb.load_data('train')
@@ -372,35 +378,55 @@ class train:
         self.corpus = corpus
         self.word_to_id = word_to_id
         self.id_to_word = id_to_word
+        self.xs =self.corpus[:-1] 
+        self.ts = self.corpus[1:]
+    # def get_xs(self):
+    #     return self.corpus[:-1]
 
-    def get_xs(self):
-        return self.corpus[:-1]
-
-    def get_tx(self):
-        return self.corpus[1:]
+    # def get_tx(self):
+    #     return self.corpus[1:]
 
     def get_step_sise(self):
-        return self.xs.size / self.time_size
+        return self.xs.size // self.time_size
 
     def get_batch_count(self):
-        batch_count = self.xs.size / self.batch_size * self.time_size
-        if (self.xs.size % self.batch_size * self.time_size) != 0:
+        batch_count = self.xs.size // ( self.batch_size * self.time_size )
+        if (self.xs.size %  ( self.batch_size * self.time_size)) != 0:
             batch_count += 1
 
         return batch_count
 
-    def get_batch_xs(self, index):
+    def get_batch_xs_ts(self, index):
 
-        batch_xs = np.zeros_like(self.time_size, self.batch_size)
-        batch_ts = np.zeros_like(self.time_size, self.batch_size)
+        batch_xs = np.zeros((self.time_size, self.batch_size)).astype('i')
+        batch_ts = np.zeros((self.time_size, self.batch_size)).astype('i')
         step_size = self.get_step_sise()
         data_size = self.xs.size
 
         for i in range(self.batch_size):
             for t in range(self.time_size):
-                batch_xs[t][i] = self.xs[(i + step_size * t + index * self.batch_size) % data_size]
-                batch_ts[t][i] = self.ts[(i + step_size * t + index * self.batch_size) % data_size]
+                batch_xs[t, i] = self.xs[(i + step_size * t + index * self.batch_size) % data_size]
+                batch_ts[t, i] = self.ts[(i + step_size * t + index * self.batch_size) % data_size]
 
         return batch_xs, batch_ts
 
-    def trian(self):
+    def train(self):
+        batch_count=self.get_batch_count()
+        optimizer=SGD(self.learning_r)
+        
+        for i in range(self.max_eporch):
+            for batch_index in range(batch_count):
+                total_lose=0
+                batch_xs, batch_ts = self.get_batch_xs_ts(batch_index)
+                model=simpleLSTM(VOCAB_SIZE=self.vocab_size)
+                total_lose += model.forward(batch_xs, batch_ts)
+                model.backward()
+                params = model.params
+                grads = model.grads
+                optimizer.update(params, grads)
+                print("toal loss: " + str(total_lose) + "batch_index: " +  str(batch_index) )
+        print("toal loss" + str(total_lose))
+
+trainer = trainer()
+trainer.read_data("")
+trainer.train()
