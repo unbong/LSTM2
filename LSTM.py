@@ -1,5 +1,6 @@
-import numpy as np
 
+import numpy as np
+import time
 from dataset import ptb
 
 
@@ -317,7 +318,7 @@ class simpleLSTM:
         self.layers = [TimeEmbedding(weight_embedding),
                        Time_LSTM(weight_LSTM_x, weight_LSTM_hidden, weight_LSTM_bias, stateful=True),
                        TimeAffine(weight_affien, weight_bias)]
-
+        self.softWithLoss = TimeSoftmaxWithLoss()
         # すべての重みと勾配をリストにまとめる
         self.params = []
         self.grads =  []
@@ -330,13 +331,13 @@ class simpleLSTM:
         for layer in self.layers:
             xs = layer.forward(xs)
 
-        softWithLoss = TimeSoftmaxWithLoss()
-        self.loselayer = softWithLoss
-        loss = softWithLoss.forward(xs, ts)
+        
+        
+        loss = self.softWithLoss.forward(xs, ts)
         return loss
 
     def backward(self, dout=1):
-        dout = self.loselayer.backward(dout)
+        dout = self.softWithLoss.backward(dout)
         for layer in reversed(self.layers):
             dout = layer.backward(dout)
 
@@ -413,10 +414,12 @@ class trainer:
     def train(self):
         batch_count=self.get_batch_count()
         optimizer=SGD(self.learning_r)
-        
+        total_lose=0
+        lose_count = 0
+        start_time = time.time()
         for i in range(self.max_eporch):
             for batch_index in range(batch_count):
-                total_lose=0
+                lose_count +=1
                 batch_xs, batch_ts = self.get_batch_xs_ts(batch_index)
                 model=simpleLSTM(VOCAB_SIZE=self.vocab_size)
                 total_lose += model.forward(batch_xs, batch_ts)
@@ -424,9 +427,16 @@ class trainer:
                 params = model.params
                 grads = model.grads
                 optimizer.update(params, grads)
-                print("toal loss: " + str(total_lose) + "batch_index: " +  str(batch_index) )
-        print("toal loss" + str(total_lose))
+               
 
-trainer = trainer()
+                if batch_index % 20 == 0 :
+                    ppl = np.exp(total_lose / lose_count)
+                    print( "ppl %f count %d time %d"  %(ppl, lose_count, time.time()-start_time) )
+                    total_lose, lose_count = 0, 0
+
+        
+
+trainer = trainer(batch_sise=40, time_size=10, VOCAB_SIZE=1000, WORDVEC_SIZE=100, HIDDED_SIZE=100,
+                    learning_r=10, max_eporch= 100)
 trainer.read_data("")
 trainer.train()
